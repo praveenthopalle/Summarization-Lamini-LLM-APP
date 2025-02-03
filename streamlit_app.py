@@ -1,79 +1,97 @@
-import streamlit as st 
+import streamlit as st
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader, DirectoryLoader
-from langchain.chains.summarize import load_summarize_chain
-from transformers import T5Tokenizer, T5ForConditionalGeneration
-from transformers import pipeline
+from langchain_community.document_loaders import PyPDFLoader
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
 import base64
+import os
 
-#model and tokenizer loading
+# Ensure SentencePiece is installed for T5 Tokenizer
+try:
+    import sentencepiece
+except ImportError:
+    print("Installing missing 'sentencepiece' package...")
+    os.system("pip install sentencepiece")
+
+# Model and tokenizer loading
 checkpoint = "LaMini-Flan-T5-248M"
-tokenizer = T5Tokenizer.from_pretrained(checkpoint)
-base_model = T5ForConditionalGeneration.from_pretrained(checkpoint, device_map='auto', torch_dtype=torch.float32)
+tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+base_model = AutoModelForSeq2SeqLM.from_pretrained(
+    checkpoint, device_map="auto", torch_dtype=torch.float32
+)
 
-#file loader and preprocessing
-def file_preprocessing(file):
-    loader =  PyPDFLoader(file)
+# File loader and preprocessing
+def file_preprocessing(file_path):
+    """Loads and splits PDF content into smaller chunks for processing."""
+    loader = PyPDFLoader(file_path)
     pages = loader.load_and_split()
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=50)
     texts = text_splitter.split_documents(pages)
-    final_texts = ""
-    for text in texts:
-        print(text)
-        final_texts = final_texts + text.page_content
+    
+    # Combine all extracted text
+    final_texts = " ".join([text.page_content for text in texts])
     return final_texts
 
-#LLM pipeline
-def llm_pipeline(filepath):
+# LLM pipeline
+def llm_pipeline(file_path):
+    """Runs the summarization model on the processed text."""
     pipe_sum = pipeline(
-        'summarization',
-        model = base_model,
-        tokenizer = tokenizer,
-        max_length = 500, 
-        min_length = 50)
-    input_text = file_preprocessing(filepath)
+        "summarization",
+        model=base_model,
+        tokenizer=tokenizer,
+        max_length=5000,
+        min_length=250
+    )
+    
+    input_text = file_preprocessing(file_path)
+    if not input_text.strip():
+        return "⚠️ No valid text found in the document."
+
     result = pipe_sum(input_text)
-    result = result[0]['summary_text']
-    return result
+    return result[0]["summary_text"]
 
 @st.cache_data
-#function to display the PDF of a given file 
-def displayPDF(file):
-    # Opening file from file path
-    with open(file, "rb") as f:
-        base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+def displayPDF(file_path):
+    """Displays PDF files in Streamlit using base64 encoding."""
+    with open(file_path, "rb") as f:
+        base64_pdf = base64.b64encode(f.read()).decode("utf-8")
 
-    # Embedding PDF in HTML
-    pdf_display = F'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf"></iframe>'
+    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
+    return pdf_display
 
-    # Displaying File
-    st.markdown(pdf_display, unsafe_allow_html=True)
-
-#streamlit code 
+# Streamlit UI configuration
 st.set_page_config(layout="wide")
 
 def main():
-    st.title("Document Summarization App using Langauge Model")
+    st.title("📄 Multi-Document Summarization App using LLM")
 
-    uploaded_file = st.file_uploader("Upload your PDF file", type=['pdf'])
+    uploaded_files = st.file_uploader("📂 Upload your PDF files", type=["pdf"], accept_multiple_files=True)
 
-    if uploaded_file is not None:
-        if st.button("Summarize"):
-            col1, col2 = st.columns(2)
-            filepath = "data/"+uploaded_file.name
-            with open(filepath, "wb") as temp_file:
+    if uploaded_files:  # Ensure files are uploaded
+        os.makedirs("data", exist_ok=True)
+
+        summaries = []
+        pdf_displays = []
+
+        for uploaded_file in uploaded_files:  # ✅ Process EACH file
+            file_path = os.path.join("data", uploaded_file.name)
+
+            # Save uploaded file
+            with open(file_path, "wb") as temp_file:
                 temp_file.write(uploaded_file.read())
-            with col1:
-                st.info("Uploaded File")
-                pdf_view = displayPDF(filepath)
 
-            with col2:
-                summary = llm_pipeline(filepath)
-                st.info("Summarization Complete")
-                st.success(summary)
+            try:
+                summary = llm_pipeline(file_path)
+                summaries.append((uploaded_file.name, summary))
+                pdf_displays.append((uploaded_file.name, displayPDF(file_path)))
+            except Exception as e:
+                st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
 
-
+        # ✅ Display PDFs and summaries using dynamic layout
+        for index, (name, pdf) in enumerate(pdf_displays):
+            st.markdown(f"### 📄 {name}")  # PDF Title
+            st.markdown(pdf, unsafe_allow_html=True)  # PDF Display
+            st.markdown(f"**📝 Summary:** {summaries[index][1]}")  # Summary
 
 if __name__ == "__main__":
     main()
