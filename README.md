@@ -16,7 +16,7 @@ pip install -r requirements.txt
 python ingest.py
 
 # Now run the application using streamlit
-streamlit run app.py
+python -m streamlit run streamlit_app.py
 
 # New port will be exposed to GUI
 Default port = 8501
